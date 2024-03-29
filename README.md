@@ -8,7 +8,7 @@ go run main.go
 
 
 ### Run the proxy server in docker machine:
-Docker build and run:
+Run the following command from project directory:
 
 ```bash
 cd server1
