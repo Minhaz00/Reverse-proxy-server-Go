@@ -1,70 +1,60 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 )
 
-// ProxyServer represents a reverse proxy server.
-type ProxyServer struct {
-	targets map[string]*url.URL
-	proxy   *httputil.ReverseProxy
-}
-
-// NewProxyServer creates a new ProxyServer instance.
-func NewProxyServer() (*ProxyServer, error) {
-	targets := map[string]*url.URL{
-		"/server1/app": parseURL("http://host.docker.internal:8001"),
-		"/server2/app": parseURL("http://host.docker.internal:8002"),
-	}
-
-	//fmt.Printf("request url path: %v\n", req.URL.Path)
-
-	reverseProxy := &httputil.ReverseProxy{
-		Director: func(req *http.Request) {
-			fmt.Printf("request url path: %v\n", req.URL.Path)
-
-			//extracting the <namespace>
-			target := targets[req.URL.Path]
-
-			//checking if valid otherwise setting up the target URL info
-			if target != nil {
-				req.URL.Scheme = target.Scheme
-				req.URL.Host = target.Host
-				req.URL.Path = target.Path
-			}
-		},
-	}
-
-	return &ProxyServer{
-		targets: targets,
-		proxy:   reverseProxy,
-	}, nil
-}
-
-// ServeHTTP handles incoming HTTP requests and forwards them to the target server.
-// Proxyserver struct method
-func (p *ProxyServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	fmt.Printf("Proxying request for %s to: %s\n", r.URL.Path, p.targets[r.URL.Path])
-	p.proxy.ServeHTTP(w, r)
-}
-
-func parseURL(rawURL string) *url.URL {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		log.Fatalf("Failed to parse URL: %v", err)
-	}
-	return u
-}
 
 func main() {
-	proxyServer, err := NewProxyServer()
-	if err != nil {
-		log.Fatalf("Failed to create proxy server: %v", err)
+
+	targets := map[string]string{
+		"server1": "http://host.docker.internal:8001",
+		"server2": "http://host.docker.internal:8002",
 	}
-	fmt.Println("Proxy server running on :8080")
-	log.Fatal(http.ListenAndServe(":8080", proxyServer)) //listening at port 8080
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+
+		splitPaths := strings.SplitN(r.URL.Path, "/", 3)
+		namespace := splitPaths[1];
+		target, _ := targets[namespace]
+
+		remote, err := url.Parse(target)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		proxy := httputil.NewSingleHostReverseProxy(remote)
+		director := proxy.Director
+		proxy.Director = func(req *http.Request) {
+			director(req)
+			log.Println(req.URL.Path)
+
+			splitPath := strings.SplitN(req.URL.Path, "/", 3)
+			log.Println(splitPath)
+			if len(splitPath) > 2 {
+				req.URL.Path = "/" + splitPath[2]
+			} else {
+				req.URL.Path = "/"
+			}
+
+			req.Header.Set("Host", req.Host)
+			req.Header.Set("X-Forwarded-Host", req.Host)
+			req.Header.Set("X-Forwarded-For", req.RemoteAddr)
+			req.Header.Set("X-Forwarded-Proto", req.URL.Scheme)
+			req.Header.Set("X-Real-IP", req.RemoteAddr)
+		}
+
+		r.URL.Host = remote.Host
+		r.URL.Scheme = remote.Scheme
+		proxy.ServeHTTP(w, r)
+	})
+
+	err := http.ListenAndServe(":8080", nil)
+	if err != nil {
+		panic(err)
+	}
 }
